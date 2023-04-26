@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta name="viewport" content="initial-scale=1.0, user-scalable=no" />
+    <style type="text/css">
+      html { height: 100% }
+      body { height: 100%; margin: 2; padding: 0 }
+
+      	.logo img {
+	    width:            10%;
+	    height:           10%;
+	    margin-left:      10px;
+	}
+
+	.banner {
+	    color:            white;
+	    background-color: #3d3d3d;
+	    padding:          8px;
+	}
+
+	.banner-interior {
+	}
+
+	.banner-heading {
+	    font-weight:      bold;
+	    font-size:        155%;
+	    margin:           0px 0px 0px 70px; // top, right, bottom, left
+	    display:          inline-block;
+	    vertical-align:   top;
+	   font-family:Helvetica;
+	}
+	br {
+	    display: block; 
+            content: ""; 
+            margin-top: 10px;
+	}
+	h2 {
+	   color:#00A9D7;
+	   color:#062E79;
+	   font-family:Helvetica;
+	}
+	input
+	{
+	   font-size:14px;
+	}
+	label
+	{
+	   font-size:14px;
+	   font-family:Helvetica;
+	}
+	button
+	{
+	  font-size:14px;
+	  cursor      : pointer;
+	  border        : 1px solid rgb(128,128,128);
+	  border-radius : 4px;
+	  padding: 2px 4px;
+	}
+      #canvas {
+	  height: 75%;
+	  width: 100%;
+	  border-top:1px #666 solid;
+      }
+	table {
+	    border-collapse: collapse;
+	    font-family: Tahoma, Geneva, sans-serif;
+	    width: 100%;
+	}
+	th.message-id {
+	  width: 10%
+	}
+	th.destination {
+	  width: 20%
+	}
+	
+	table td, th {
+	    padding: 5px;
+	}
+	table thead th {
+	    background-color: #54585d;
+	    color: #ffffff;
+	    font-weight: bold;
+	    font-size: 13px;
+	    border: 1px solid #54585d;
+	}
+	table tbody td {
+	    color: #636363;
+	    border: 1px solid #dddfe1;
+	}
+	table tbody tr {
+	    background-color: #e9eaeb;
+	}
+	table tbody tr:nth-child(odd) {
+	    background-color: #ffffff;
+	}
+    </style>
+     
+    <script type="text/javascript" src="SolBrokerConfig.js"></script>
+    <script type="text/javascript" src="solclient-debug.js"></script>
+    <script type="text/javascript">
+
+    Debug=false;
+    var configIndex=0;
+    var messages = [];
+    var messageCount = 0;
+
+    function initialize() {
+
+	configIndex = Math.floor(Math.random() * SolaceBrokerConfig.length); 
+	resetConfig();
+
+        /* Setup our timer */
+        window.setInterval(function() {
+            timerFunction();
+        }, 1000);
+
+	// Initialize factory with the most recent API defaults
+        var factoryProps = new solace.SolclientFactoryProperties();
+        factoryProps.profile = solace.SolclientFactoryProfiles.version10;
+        solace.SolclientFactory.init(factoryProps);
+
+        // enable logging to JavaScript console at WARN level
+        // NOTICE: works only with "solclientjs-debug.js"
+        solace.SolclientFactory.setLogLevel(solace.LogLevel.WARN);
+
+    }
+
+    var connection = {};
+
+    connection.session = null;
+    connection.queueName = null;
+    connection.subscribed = false;
+
+    // Establishes connection to Solace router
+    connection.connect = function () {
+	// extract params
+	if (connection.session !== null) {
+	    connection.log('Already connected and ready to browse.');
+	    return;
+	}
+	var hosturl = document.getElementById('url').value;
+	// check for valid protocols
+	if (hosturl.lastIndexOf('ws://', 0) !== 0 && hosturl.lastIndexOf('wss://', 0) !== 0 &&
+	    hosturl.lastIndexOf('http://', 0) !== 0 && hosturl.lastIndexOf('https://', 0) !== 0) {
+	    connection.log('Invalid protocol - please use one of ws://, wss://, http://, https://');
+	    return;
+	}
+	var username = document.getElementById('username').value;
+	var pass = document.getElementById('password').value;
+	var vpn = document.getElementById('vpn').value;
+	if (!hosturl || !username || !pass || !vpn) {
+	    connection.log('Cannot connect: please specify all the Solace broker properties.');
+	    return;
+	}
+	connection.log('Connecting to Solace broker using url: ' + hosturl);
+	connection.log('Client username: ' + username);
+	connection.log('Solace broker VPN name: ' + vpn);
+	// create session
+	try {
+	    connection.session = solace.SolclientFactory.createSession({
+		// solace.SessionProperties
+		url:      hosturl,
+		vpnName:  vpn,
+		userName: username,
+		password: pass,
+	    });
+	} catch (error) {
+	    Debug = true;
+	    connection.log(error.toString());
+	}
+	// define session event listeners
+	connection.session.on(solace.SessionEventCode.UP_NOTICE, function (sessionEvent) {
+	    connection.log('=== Successfully connected and ready to browse. ===');
+	});
+	connection.session.on(solace.SessionEventCode.CONNECT_FAILED_ERROR, function (sessionEvent) {
+	    connection.log('Connection failed to the broker: ' + sessionEvent.infoStr +
+		' - check correct parameter values and connectivity!');
+	});
+	connection.session.on(solace.SessionEventCode.DISCONNECTED, function (sessionEvent) {
+	    connection.log('Disconnected.');
+	    // Do not reference session obj
+	});
+
+       connection.connectToSolace();   
+
+    };
+
+    // Actually connects the session triggered when the iframe has been loaded - see in html code
+    connection.connectToSolace = function () {
+	try {
+	    connection.session.connect();
+	} catch (error) {
+	    connection.log(error.toString());
+	}
+    };
+
+    // connects and starts queue browser
+    connection.browserConnect = function () {
+	if (connection.session !== null) {
+	    if (connection.subscribed && connection.queueName !== document.getElementById('queue').value) {
+	
+		//connection.log('Already subscribed to "' + connection.queueName
+		    //+ '" and ready to receive messages.');
+		// This is called already
+		//connection.unsubscribe();
+	    } 
+	    connection.queueName = document.getElementById('queue').value;
+	    connection.log('Browsing queue: ' + connection.queueName);
+	    try {
+		    connection.queueBrowser = connection.session.createQueueBrowser({
+                        // solace.queueBrowserProperties
+                        queueDescriptor: { name: connection.queueName, type: solace.QueueType.QUEUE }
+                    });
+ 
+                    // Define message consumer event listeners
+                    connection.queueBrowser.on(solace.QueueBrowserEventName.UP, function () {
+                        connection.log('=== Ready to browse messages. ===');
+			connection.subscribed = true;
+                    });
+                    connection.queueBrowser.on(solace.QueueBrowserEventName.CONNECT_FAILED_ERROR, function () {
+                        connection.log('=== Error: the message browser could not bind to queue "' + connection.queueName +
+                            '" ===  Ensure this queue exists on the broker vpn');
+                    });
+                    connection.queueBrowser.on(solace.QueueBrowserEventName.DOWN, function () {
+                        connection.log('=== The message browser is now down ===');
+                    });
+                    connection.queueBrowser.on(solace.QueueBrowserEventName.DOWN_ERROR, function () {
+                        connection.log('=== An error happened, the message browser is down ===');
+                    });
+		    // This generates error..
+                    //connection.queueBrowser.on(solace.QueueBrowserEventName.DISPOSE, function () {
+                        //connection.log('=== An error happened, the message browser is DISPOSED ===');
+                    //});
+                    connection.queueBrowser.on(solace.QueueBrowserEventName.GM_DISABLED, function () {
+                        connection.log('=== An error happened, the message browser is GM_DISABLED ===');
+                    });
+                    // Define message received event listener
+                    connection.queueBrowser.on(solace.QueueBrowserEventName.MESSAGE, function (message) {
+			   addMsgToTable(message);
+                    });
+                    // Connect the browser
+                    connection.queueBrowser.connect();
+                    connection.queueBrowser.start();
+
+	    } catch (error) {
+		Debug = true;
+		connection.log(error.toString());
+	    }
+	} else {
+	    connection.log('Cannot connect browser because not connected to Solace broker.');
+	}
+    };
+
+    // Disconnects from queue on Solace broker
+    connection.browserDisconnect = function () {
+	if (connection.session !== null) {
+	    if (connection.subscribed) {
+		connection.log('Disconnecting browser from queue: ' + connection.queueName);
+		try {
+			connection.queueBrowser.stop();
+			connection.queueBrowser.disconnect();
+			connection.subscribed = false;
+		} catch (error) {
+		    connection.log(error.toString());
+		}
+	    } else {
+		connection.log('Cannot disconnect because not connected to the queue "'
+		    + connection.queueName + '"');
+	    }
+	} else {
+	    connection.log('Cannot disconnect because not connected to Solace broker.');
+	}
+    };
+
+    // Gracefully disconnects from Solace broker
+    connection.disconnect = function () {
+	connection.log('Disconnecting from Solace broker...');
+	if (connection.session !== null) {
+	    try {
+		connection.session.disconnect();
+		connection.session = null;
+
+	    } catch (error) {
+		connection.log(error.toString());
+	    }
+	} else {
+	    connection.log('Not connected to Solace broker.');
+	}
+    };
+
+    connection.log = function (line) {
+        var now = new Date();
+        var time = [('0' + now.getHours()).slice(-2), ('0' + now.getMinutes()).slice(-2),
+            ('0' + now.getSeconds()).slice(-2)];
+        var timestamp = '[' + time.join(':') + '] ';
+	document.getElementById("log").innerHTML=timestamp+line;
+	if (Debug)
+	{
+	    console.log(timestamp+line);
+	}
+    }
+    connection.logNoDebug = function (line) {
+        var now = new Date();
+        var time = [('0' + now.getHours()).slice(-2), ('0' + now.getMinutes()).slice(-2),
+            ('0' + now.getSeconds()).slice(-2)];
+        var timestamp = '[' + time.join(':') + '] ';
+	document.getElementById("log").innerHTML=timestamp+line;
+    }
+
+    function onConnect(e) {
+	if (e.shiftKey) {
+	    Debug = true;
+	}
+
+
+        reset();
+	if (connection.session !== null) {
+
+	    connection.browserDisconnect();
+	    connection.disconnect();
+	}
+
+	connection.connect();
+
+    }
+    function onBrowse(e) {
+	connection.browserDisconnect();
+	reset();
+	connection.browserConnect();   
+    }
+
+    function onRefresh() {
+	reset();
+	resetConfig();
+	if (connection.session !== null) {
+
+	    connection.disconnect();
+	}
+
+    }
+
+    function resetConfig() {
+	configIndex++;
+	if (configIndex >= SolaceBrokerConfig.length)
+	{
+	    configIndex = 0;
+	}
+	document.getElementById('url').value = SolaceBrokerConfig[configIndex].url;
+	document.getElementById('vpn').value=SolaceBrokerConfig[configIndex].vpn;
+	document.getElementById('username').value=SolaceBrokerConfig[configIndex].username;
+	document.getElementById('password').value=SolaceBrokerConfig[configIndex].password;
+	document.getElementById('username').blur();
+
+    }
+
+    function reset() {
+	var table = document.getElementById('msg-table');
+	while(table.rows.length > 1) {
+	  table.deleteRow(1);
+	}
+	messages = [];
+	messageCount = 0;
+    }
+
+    function timerFunction() {
+	if (connection.subscribed && messageCount > 1000)
+	{
+	    window.alert("Over 1000 messages! Stopping browser");
+	    connection.browserDisconnect();
+	}
+    }
+
+    function addMsgToTable(msg) {
+	// insert at begining of array
+	//messages.unshift(msg();
+	var table = document.getElementById('msg-table-body');
+
+	var row = table.insertRow(-1);
+
+	var idCell = row.insertCell(0);
+	var destCell = row.insertCell(1);
+	var msgCell = row.insertCell(2);
+
+	idCell.innerHTML = msg.getGuaranteedMessageId();
+	destCell.innerHTML = msg.getDestination().toString().slice(1,-1);
+	if (msg.getType() == solace.MessageType.TEXT)
+	    msgCell.innerHTML = msg.getSdtContainer().getValue();
+	else
+	if (msg.getType() == solace.MessageType.BINARY)
+	    msgCell.innerHTML = msg.getBinaryAttachment();
+	else
+	    msgCell.innerHTML = "Unsupported message type: "+msg.getType();
+
+	messageCount++;
+
+    }
+
+    </script>
+
+  </head>
+  <body onload="initialize()">
+    <div class="banner">
+      <span class="logo">
+	<a href="http://dev.solace.com/">
+	  <img src="images/solace-logo.png"/>
+	</a>
+      </span>
+      <span class="banner-heading">
+	  Queue Message Browser
+      </span>
+
+    </div>
+
+        <div class="container">
+	    <br/>
+	    <form class='form-inline'>
+		<label>Solace Cloud URL:</label>
+		<input type="text" id="url" size='50' value=""/>
+		<label>Service(VPN):</label>
+		<input type="text" id="vpn" size='25' value=""/>
+		<a href="javascript:onRefresh()">
+		    <img src="images/refresh.png" width="25" style="vertical-align:middle;margin:0px 0px"/> 
+		</a>
+	    </form>
+	    <br/>
+	    <form class='form-inline'>
+		<label>User:</label>
+		<input type="text" id="username" size='25' value=""/>
+		<label>Password:</label>
+		<input type="password" id="password" size='25' value=""/>
+		<button type='button' class="btn" title="Press with SHIFT to log to console" id="connectButton" onClick="onConnect(event)">Connect</button>
+	    </form>
+	    <br/>
+	    <form class='form-inline'>
+		<label>Queue:</label>
+		<input type="text" id="queue" size='45' value="test-queue"/>
+		<button type='button' class="btn" id="subscribeButton" onClick="onBrowse(event)">Browse</button>
+	    </form>
+	</div>
+	<hr/>
+	<div class='span2'>
+	    <label id='log' size='100'>&nbsp;</label>
+	</div>
+	</br>
+	<div id="canvas">
+
+	  <span>
+	
+	    <table id='msg-table'>
+		<thead>
+		    <tr>
+			<th class="message-id">MessageId</th>
+			<th class="destination">Destination</th>
+			<th>MessageContent</th>
+		    </tr>
+		</thead>
+		<tbody id='msg-table-body'>
+		</tbody>
+	    </table>
+	  </span>
+	</div>
+  </body>
+</html>
