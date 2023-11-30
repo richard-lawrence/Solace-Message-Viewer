@@ -378,12 +378,19 @@
 	timestampCell.innerHTML = timestamp;
 	destCell.innerHTML = msg.getDestination().toString().slice(1,-1);
 	if (msg.getType() == solace.MessageType.TEXT)
-	    msgCell.innerHTML = msg.getSdtContainer().getValue();
+	{
+	    if ((msgCell.innerHTML = msg.getSdtContainer().getValue()) === undefined)
+		msgCell.innerHTML = "";
+	}
+	else if (msg.getType() == solace.MessageType.BINARY)
+	{
+	    if ((msgCell.innerHTML = msg.getBinaryAttachment()) === undefined)
+		msgCell.innerHTML = "";
+	}
 	else
-	if (msg.getType() == solace.MessageType.BINARY)
-	    msgCell.innerHTML = msg.getBinaryAttachment();
-	else
-	    msgCell.innerHTML = "Unsupported message type: "+msg.getType();
+	{
+		msgCell.innerHTML = "Unsupported message type: "+msg.getType();
+	}
 
 	messageCount++;
     }
